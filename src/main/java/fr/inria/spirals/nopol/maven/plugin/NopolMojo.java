@@ -1,5 +1,6 @@
 package fr.inria.spirals.nopol.maven.plugin;
 
+import com.google.common.io.ByteStreams;
 import fr.inria.lille.commons.synthesis.smt.solver.SolverFactory;
 import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.common.patch.Patch;
@@ -7,7 +8,6 @@ import fr.inria.lille.repair.common.synth.StatementType;
 import fr.inria.lille.repair.nopol.NoPol;
 import fr.inria.lille.repair.nopol.NopolResult;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.log4j.Level;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DependencyResolutionRequiredException;
 import org.apache.maven.artifact.factory.ArtifactFactory;
@@ -28,15 +28,15 @@ import org.apache.maven.plugins.surefire.report.ReportTestSuite;
 import org.apache.maven.plugins.surefire.report.SurefireReportParser;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.reporting.MavenReportException;
-import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -69,14 +69,20 @@ public class NopolMojo extends AbstractMojo {
     @Parameter( defaultValue = "${project.build.directory}/nopol", property = "resultDir", required = true )
     private File resultDirectory;
 
-    @Parameter( defaultValue = "pre-then-cond", property = "type", required = true )
+    @Parameter( defaultValue = "pre_then_cond", property = "type", required = true )
     private String type;
 
     @Parameter( defaultValue = "10", property = "maxTime", required = true )
     private int maxTime;
 
+    @Parameter( defaultValue = "gzoltar", property = "localizer", required = true )
+    private String localizer;
+
     @Parameter( defaultValue = "dynamoth", property = "synthesis", required = true )
     private String synthesis;
+
+    @Parameter( defaultValue = "z3", property = "solver", required = true )
+    private String solver;
 
     @Parameter(defaultValue="${project}", readonly=true, required=true)
     private MavenProject project;
@@ -109,15 +115,23 @@ public class NopolMojo extends AbstractMojo {
         nopolContext.setTimeoutTestExecution(300);
         nopolContext.setMaxTimeEachTypeOfFixInMinutes(15);
         nopolContext.setMaxTimeInMinutes(maxTime);
-        nopolContext.setLocalizer(NopolContext.NopolLocalizer.GZOLTAR);
-        nopolContext.setSynthesis(NopolContext.NopolSynthesis.DYNAMOTH);
-        nopolContext.setType(StatementType.COND_THEN_PRE);
-        nopolContext.setSolver(NopolContext.NopolSolver.Z3);
-        nopolContext.setSolverPath("/tmp/z3");
-        nopolContext.setOnlyOneSynthesisResult(false);
+        nopolContext.setLocalizer(this.resolveLocalizer());
+        nopolContext.setSynthesis(this.resolveSynthesis());
+        nopolContext.setType(this.resolveType());
+        nopolContext.setOnlyOneSynthesisResult(true);
         nopolContext.setJson(true);
 
-        SolverFactory.setSolver(nopolContext.getSolver(), "/tmp/z3");
+        NopolContext.NopolSolver solver = this.resolveSolver();
+        nopolContext.setSolver(solver);
+
+        if (solver == NopolContext.NopolSolver.Z3) {
+            String z3Path = this.loadZ3AndGivePath();
+            SolverFactory.setSolver(solver, z3Path);
+            nopolContext.setSolverPath(z3Path);
+        } else {
+            SolverFactory.setSolver(solver, null);
+        }
+
         final NoPol nopol = new NoPol(nopolContext);
         NopolResult result = nopol.build();
 
@@ -130,6 +144,57 @@ public class NopolMojo extends AbstractMojo {
                 System.out.println("Obtained patch: "+p.asString());
             }
         }
+    }
+
+    private NopolContext.NopolSolver resolveSolver() {
+        try {
+            return NopolContext.NopolSolver.valueOf(solver.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Solver value \""+solver+"\" is wrong. Only following values are accepted: "+StringUtils.join(NopolContext.NopolSolver.values(),", "));
+        }
+    }
+
+    private NopolContext.NopolLocalizer resolveLocalizer() {
+        try {
+            return NopolContext.NopolLocalizer.valueOf(localizer.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Localizer value \""+localizer+"\" is wrong. Only following values are accepted: "+StringUtils.join(NopolContext.NopolLocalizer.values(), ","));
+        }
+    }
+
+    private NopolContext.NopolSynthesis resolveSynthesis() {
+        try {
+            return NopolContext.NopolSynthesis.valueOf(synthesis.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Synthesis value \""+synthesis+"\" is wrong. Only following values are accepted: "+StringUtils.join(NopolContext.NopolSynthesis.values(), ","));
+        }
+    }
+
+    private StatementType resolveType() {
+        try {
+            return StatementType.valueOf(type.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Type value \""+type+"\" is wrong. Only following values are accepted: "+StringUtils.join(StatementType.values(), ","));
+        }
+    }
+
+    private String loadZ3AndGivePath() {
+        boolean isMac = System.getProperty("os.name").toLowerCase().contains("mac");
+
+        String resourcePath = (isMac)? "z3/z3_for_mac" : "z3/z3_for_linux";
+        InputStream in = this.getClass().getClassLoader().getResourceAsStream(resourcePath);
+
+        try {
+            Path tempFilePath = Files.createTempFile("nopol", "z3");
+            byte[] content = ByteStreams.toByteArray(in);
+            Files.write(tempFilePath, content);
+
+            tempFilePath.toFile().setExecutable(true);
+            return tempFilePath.toString();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 
     private File getSurefireReportsDirectory( MavenProject subProject ) {
