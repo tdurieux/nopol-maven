@@ -226,7 +226,7 @@ public class NopolMojo extends AbstractMojo {
     }
 
     private List<URL> getClasspath() {
-        List<URL> classpath = new ArrayList<URL>();
+        Set<URL> classpath = new HashSet<>();
         for (MavenProject mavenProject : reactorProjects) {
             try {
                 for (String s : (List<String>)mavenProject.getTestClasspathElements()) {
@@ -241,7 +241,9 @@ public class NopolMojo extends AbstractMojo {
         }
 
         final Artifact artifactPom = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "pom");
+        Artifact artifactJar = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "jar");
         File filePom = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifactPom));
+        File fileJar = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifactJar));
 
         if (filePom.exists()) {
             MavenXpp3Reader pomReader = new MavenXpp3Reader();
@@ -257,12 +259,13 @@ public class NopolMojo extends AbstractMojo {
                         classpath.add(jarFile.toURI().toURL());
                     }
                 }
+               classpath.add(fileJar.toURI().toURL());
             } catch (Exception e) {
                 e.printStackTrace();
                 System.err.println("Error occured, dependency will be passed: "+e.getMessage());
             }
         }
-        return classpath;
+        return new ArrayList<>(classpath);
     }
 
     private List<File> getSourceFolders() {

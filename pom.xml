@@ -66,6 +66,71 @@
             <artifactId>maven-model</artifactId>
             <version>3.5.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.sun</groupId>
+            <artifactId>tools</artifactId>
+            <version>1.4.2</version>
+            <scope>system</scope>
+            <systemPath>${java.home}/../lib/tools.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.11</version>
+        </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-plugin-plugin</artifactId>
+                <version>3.5</version>
+                <configuration>
+                    <goalPrefix>nopol</goalPrefix>
+                    <skipErrorNoDescriptorsFound>true</skipErrorNoDescriptorsFound>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>mojo-descriptor</id>
+                        <goals>
+                            <goal>descriptor</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>help-goal</id>
+                        <goals>
+                            <goal>helpmojo</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <repositories>
+
+        <repository>
+            <id>inria</id>
+            <url>http://maven-repo.gforge.inria.fr/releases</url>
+        </repository>
+        <repository>
+            <id>sachaproject.gforge.inria.fr-release</id>
+            <name>Maven Repository for Spoon Release</name>
+            <url>http://sachaproject.gforge.inria.fr/repositories/releases/</url>
+            <snapshots/>
+        </repository>
+        <repository>
+            <id>gforge.inria.fr-snapshot</id>
+            <name>Maven Repository for Spoon Snapshot</name>
+            <url>http://spoon.gforge.inria.fr/repositories/snapshots/</url>
+            <snapshots/>
+        </repository>
+        <repository>
+            <id>spoon.gforge.inria.fr-release</id>
+            <name>Maven Repository for Spoon Release</name>
+            <url>http://spoon.gforge.inria.fr/repositories/releases/</url>
+            <snapshots/>
+        </repository>
+    </repositories>
 </project>
