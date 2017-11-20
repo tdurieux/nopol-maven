@@ -33,6 +33,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
@@ -63,6 +64,15 @@ public class NopolMojo extends AbstractMojo {
     @Component
     private ArtifactFactory artifactFactory;
 
+    @Parameter(defaultValue="${project}", readonly=true, required=true)
+    private MavenProject project;
+
+    @Parameter( defaultValue = "${reactorProjects}", readonly = true )
+    private List<MavenProject> reactorProjects;
+
+    @Parameter(defaultValue="${localRepository}")
+    private ArtifactRepository localRepository;
+
     @Parameter( defaultValue = "${project.build.directory}/nopol", property = "outputDir", required = true )
     private File outputDirectory;
 
@@ -84,34 +94,56 @@ public class NopolMojo extends AbstractMojo {
     @Parameter( defaultValue = "z3", property = "solver", required = true )
     private String solver;
 
-    @Parameter(defaultValue="${project}", readonly=true, required=true)
-    private MavenProject project;
-
-    @Parameter( defaultValue = "${reactorProjects}", readonly = true )
-    private List<MavenProject> reactorProjects;
-
-    @Parameter(defaultValue="${localRepository}")
-    private ArtifactRepository localRepository;
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
-        List<String> failingTestCases = getFailingTests();
-        List<URL> dependencies = getClasspath();
-        List<File> sourceFolders = getSourceFolders();
+        final List<String> failingTestCases = getFailingTests();
+        final List<URL> dependencies = getClasspath();
+        final List<File> sourceFolders = getSourceFolders();
 
-        System.out.println(failingTestCases.size()+" detected failing test classes. ("+ StringUtils.join(failingTestCases,":")+")");
+        System.out.println(failingTestCases.size() + " detected failing test classes. (" + StringUtils.join(failingTestCases,":") + ")");
 
-        int complianceLevel = 7;
-        if (!source.equals("-1")) {
-            complianceLevel = Integer.parseInt(source.substring(2));
-        } else if (!oldSource.equals("-1")) {
-            complianceLevel = Integer.parseInt(oldSource.substring(2));
-        } else if (!javaVersion.equals("-1")) {
-            complianceLevel = Integer.parseInt(javaVersion.substring(2, 3));
+        final List<URL> nopolClasspath = getNopolClasspath();
+        final String systemClasspath = System.getProperty("java.class.path");
+
+        final StringBuilder sb = new StringBuilder(systemClasspath);
+        sb.append(":");
+        for (int i = 0; i < nopolClasspath.size(); i++) {
+            URL url = nopolClasspath.get(i);
+            sb.append(url.getPath());
+            if (i < nopolClasspath.size() - 1) {
+                sb.append(":");
+            }
         }
 
+        try {
+            setGzoltarDebug(true);
+            System.setProperty("java.class.path", sb.toString());
+            NopolContext nopolContext = createNopolContext(failingTestCases, dependencies, sourceFolders);
+            final NoPol nopol = new NoPol(nopolContext);
+            NopolResult result = nopol.build();
+            printResults(result);
+        } finally {
+            System.setProperty("java.class.path", systemClasspath);
+        }
+    }
+
+    private void printResults(NopolResult result) {
+        System.out.println("Nopol executed after: "+result.getDurationInMilliseconds()+" ms.");
+        System.out.println("Status: "+result.getNopolStatus());
+        System.out.println("Angelic values: "+result.getNbAngelicValues());
+        System.out.println("Nb statements: "+result.getNbStatements());
+        if (result.getPatches().size() > 0) {
+            for (Patch p : result.getPatches()) {
+                System.out.println("Obtained patch: "+p.asString());
+            }
+        }
+    }
+
+    private NopolContext createNopolContext(List<String> failingTestCases,
+            List<URL> dependencies, List<File> sourceFolders) {
         NopolContext nopolContext = new NopolContext(sourceFolders.toArray(new File[0]), dependencies.toArray(new URL[0]), failingTestCases.toArray(new String[0]), Collections.<String>emptyList());
-        nopolContext.setComplianceLevel(complianceLevel);
+        nopolContext.setComplianceLevel(getComplianceLevel());
         nopolContext.setTimeoutTestExecution(300);
         nopolContext.setMaxTimeEachTypeOfFixInMinutes(15);
         nopolContext.setMaxTimeInMinutes(maxTime);
@@ -124,26 +156,38 @@ public class NopolMojo extends AbstractMojo {
         NopolContext.NopolSolver solver = this.resolveSolver();
         nopolContext.setSolver(solver);
 
-        if (solver == NopolContext.NopolSolver.Z3) {
-            String z3Path = this.loadZ3AndGivePath();
-            SolverFactory.setSolver(solver, z3Path);
-            nopolContext.setSolverPath(z3Path);
-        } else {
-            SolverFactory.setSolver(solver, null);
-        }
-
-        final NoPol nopol = new NoPol(nopolContext);
-        NopolResult result = nopol.build();
-
-        System.out.println("Nopol executed after: "+result.getDurationInMilliseconds()+" ms.");
-        System.out.println("Status: "+result.getNopolStatus());
-        System.out.println("Angelic values: "+result.getNbAngelicValues());
-        System.out.println("Nb statements: "+result.getNbStatements());
-        if (result.getPatches().size() > 0) {
-            for (Patch p : result.getPatches()) {
-                System.out.println("Obtained patch: "+p.asString());
+        if (nopolContext.getSynthesis() == NopolContext.NopolSynthesis.SMT) {
+            if (solver == NopolContext.NopolSolver.Z3) {
+                String z3Path = this.loadZ3AndGivePath();
+                SolverFactory.setSolver(solver, z3Path);
+                nopolContext.setSolverPath(z3Path);
+            } else {
+                SolverFactory.setSolver(solver, null);
             }
         }
+        return nopolContext;
+    }
+
+    private void setGzoltarDebug(boolean debugValue) {
+        try {
+            Field debug = com.gzoltar.core.agent.Launcher.class.getDeclaredField("debug");
+            debug.setAccessible(true);
+            debug.setBoolean(null, debugValue);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private int getComplianceLevel() {
+        int complianceLevel = 7;
+        if (!source.equals("-1")) {
+            complianceLevel = Integer.parseInt(source.substring(2));
+        } else if (!oldSource.equals("-1")) {
+            complianceLevel = Integer.parseInt(oldSource.substring(2));
+        } else if (!javaVersion.equals("-1")) {
+            complianceLevel = Integer.parseInt(javaVersion.substring(2, 3));
+        }
+        return complianceLevel;
     }
 
     private NopolContext.NopolSolver resolveSolver() {
@@ -225,22 +269,9 @@ public class NopolMojo extends AbstractMojo {
         return result;
     }
 
-    private List<URL> getClasspath() {
-        Set<URL> classpath = new HashSet<>();
-        for (MavenProject mavenProject : reactorProjects) {
-            try {
-                for (String s : (List<String>)mavenProject.getTestClasspathElements()) {
-                    File f = new File(s);
-                    classpath.add(f.toURI().toURL());
-                }
-            } catch (DependencyResolutionRequiredException e) {
-                continue;
-            } catch (MalformedURLException e) {
-                e.printStackTrace();
-            }
-        }
-
-        final Artifact artifactPom = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "pom");
+    private List<URL> getNopolClasspath() {
+        List<URL> classpath = new ArrayList<>();
+        Artifact artifactPom = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "pom");
         Artifact artifactJar = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "jar");
         File filePom = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifactPom));
         File fileJar = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifactJar));
@@ -257,13 +288,53 @@ public class NopolMojo extends AbstractMojo {
                         File jarFile = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifact));
 
                         classpath.add(jarFile.toURI().toURL());
+                    } else if ("system".equals(dependency.getScope())) {
+                        String path = dependency.getSystemPath().replace("${java.home}", System.getProperty("java.home"));
+                        File jarFile = new File(path);
+                        if (jarFile.exists()) {
+                            classpath.add(jarFile.toURI().toURL());
+                        }
                     }
                 }
-               classpath.add(fileJar.toURI().toURL());
+                classpath.add(fileJar.toURI().toURL());
             } catch (Exception e) {
                 e.printStackTrace();
                 System.err.println("Error occured, dependency will be passed: "+e.getMessage());
             }
+        }
+        return classpath;
+    }
+
+    private List<URL> getClasspath() {
+        List<URL> classpath = new ArrayList<>();
+        for (MavenProject mavenProject : reactorProjects) {
+            try {
+                for (String s : (List<String>)mavenProject.getTestClasspathElements()) {
+                    File f = new File(s);
+                    classpath.add(f.toURI().toURL());
+                }
+            } catch (DependencyResolutionRequiredException e) {
+                continue;
+            } catch (MalformedURLException e) {
+                e.printStackTrace();
+            }
+        }
+
+        Artifact artifactJar = artifactFactory.createArtifact("fr.inria.lille.adam","nopol", HARDCODED_NOPOL_VERSION, null, "jar");
+        File fileJar = new File(localRepository.getBasedir() + "/" + localRepository.pathOf(artifactJar));
+
+        try {
+            if (fileJar.exists()) {
+                classpath.add(fileJar.toURI().toURL());
+            }
+            String path = System.getProperty("java.home") + "/../lib/tools.jar";
+            File jarFile = new File(path);
+            if (jarFile.exists()) {
+                classpath.add(jarFile.toURI().toURL());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.err.println("Error occured, dependency will be passed: "+e.getMessage());
         }
         return new ArrayList<>(classpath);
     }
