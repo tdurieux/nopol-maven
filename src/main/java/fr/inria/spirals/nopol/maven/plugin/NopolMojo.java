@@ -107,9 +107,14 @@ public class NopolMojo extends AbstractMojo {
         final String systemClasspath = System.getProperty("java.class.path");
 
         final StringBuilder sb = new StringBuilder(systemClasspath);
-        sb.append(":");
+        if (sb.lastIndexOf(":") != sb.length() - 1) {
+            sb.append(":");
+        }
         for (int i = 0; i < nopolClasspath.size(); i++) {
             URL url = nopolClasspath.get(i);
+            if (!systemClasspath.contains(url.getPath())) {
+                continue;
+            }
             sb.append(url.getPath());
             if (i < nopolClasspath.size() - 1) {
                 sb.append(":");
